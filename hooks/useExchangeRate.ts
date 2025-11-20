@@ -17,9 +17,6 @@ export const useExchangeRate = (pollIntervalMs: number = 60000) => {
     } catch (err) {
       setStatus(AppStatus.ERROR);
       setError(err instanceof Error ? err.message : 'Failed to fetch rates');
-      // Fallback mock data for demo purposes if API fails entirely (e.g. quota)
-      // In a real production app, we would just show the error.
-      // setData({ rate: 3.45, lastUpdated: 'Now (Simulated)', sourceUrl: '#' }); 
     }
   }, []);
 

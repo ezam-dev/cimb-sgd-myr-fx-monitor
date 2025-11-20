@@ -28,6 +28,9 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
+  // State: Comparison
+  const [previousRate, setPreviousRate] = useState<number | null>(null);
+
   // State: UI
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -38,8 +41,8 @@ const App: React.FC = () => {
   const [showHelp, setShowHelp] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
-  // Hooks
-  const { data, status, error, refetch, setRate } = useExchangeRate(10 * 60 * 1000); // Poll every 10 mins
+  // Hooks - Poll every 1 minute (60000ms)
+  const { data, status, error, refetch, setRate } = useExchangeRate(60000);
 
   // Effect: Theme Handling
   useEffect(() => {
@@ -55,16 +58,21 @@ const App: React.FC = () => {
 
   const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
 
-  // Effect: Data Processing (History & Alerts)
+  // Effect: Data Processing (History, Alerts, Audits)
   useEffect(() => {
     if (status === 'SUCCESS' && data) {
       
-      // 1. Update History if it's a new timestamp or empty
+      // Update Comparison State (Get last rate before this update if exists)
       setHistory(prev => {
         const lastItem = prev[prev.length - 1];
-        // Simple check to avoid dupes in quick succession (same minute)
-        // If source is Simulation, we always allow it for testing graph updates
-        if (data.sourceUrl !== 'Simulation' && lastItem && lastItem.time === data.lastUpdated && lastItem.rate === data.rate) {
+        
+        // Update previous rate state for comparison UI
+        if (lastItem) {
+            setPreviousRate(lastItem.rate);
+        }
+
+        // Avoid duplicate history entries if values match exactly within same timeframe
+        if (data.sourceUrl !== 'Simulation' && lastItem && lastItem.rate === data.rate && lastItem.time === data.lastUpdated) {
           return prev;
         }
         
@@ -79,31 +87,41 @@ const App: React.FC = () => {
         return newHistory;
       });
 
-      // 2. Check Alerts
-      if (data.rate >= threshold) {
-        setAlerts(prev => {
-           // Prevent spamming alert for the same breach session (within 30 mins)
-           const lastAlert = prev[0];
+      // Add Audit Log for every fetch
+      setAlerts(prev => {
+        // Audit Log Entry
+        const auditLog: AlertLogItem = {
+            id: crypto.randomUUID(),
+            timestamp: new Date().toLocaleTimeString(),
+            message: `Sync: ${data.rate.toFixed(4)} MYR`,
+            type: 'info'
+        };
+
+        // Threshold Alert
+        let newItems = [auditLog];
+        
+        if (data.rate >= threshold) {
+           // Cooldown check for Threshold alerts
+           const lastAlert = prev.find(p => p.type === 'success'); // Find last success/threshold alert
            const now = Date.now();
            const cooldown = 30 * 60 * 1000; 
            
-           // If we have a recent alert (less than 30m ago) about crossing threshold, skip
-           // Unless it is a simulation (to allow testing alerts easily)
-           if (data.sourceUrl !== 'Simulation' && lastAlert && (now - new Date(lastAlert.timestamp).getTime() < cooldown) && lastAlert.type === 'success') {
-             return prev;
-           }
+           const shouldAlert = !lastAlert || (now - new Date(lastAlert.timestamp).getTime() > cooldown) || data.sourceUrl === 'Simulation';
 
-           const newAlert: AlertLogItem = {
-             id: crypto.randomUUID(),
-             timestamp: new Date().toLocaleTimeString(),
-             message: `Rate reached target: ${data.rate.toFixed(4)} MYR`,
-             type: 'success'
-           };
-           const newAlerts = [newAlert, ...prev].slice(0, 20);
-           localStorage.setItem('fx_alerts', JSON.stringify(newAlerts));
-           return newAlerts;
-        });
-      }
+           if (shouldAlert) {
+               newItems.push({
+                 id: crypto.randomUUID(),
+                 timestamp: new Date().toLocaleTimeString(),
+                 message: `Target Hit: ${data.rate.toFixed(4)} MYR`,
+                 type: 'success'
+               });
+           }
+        }
+
+        const updatedAlerts = [...newItems, ...prev].slice(0, 50); // Increased log size
+        localStorage.setItem('fx_alerts', JSON.stringify(updatedAlerts));
+        return updatedAlerts;
+      });
     }
   }, [data, status, threshold]);
 
@@ -142,67 +160,75 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen pb-10 transition-colors duration-300">
-      <Header theme={theme} toggleTheme={toggleTheme} onOpenHelp={() => setShowHelp(true)} />
+    <div className="min-h-screen relative w-full overflow-hidden pb-10 transition-colors duration-500">
       
-      <main className="max-w-md mx-auto px-4 py-6 transition-all duration-500">
+      {/* Ambient Animated Background for Liquid Effect */}
+      <div className="fixed inset-0 w-full h-full overflow-hidden pointer-events-none z-0">
+         <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-400/20 dark:bg-blue-600/20 rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-3xl opacity-70 animate-blob"></div>
+         <div className="absolute top-0 right-1/4 w-96 h-96 bg-purple-400/20 dark:bg-purple-600/20 rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-3xl opacity-70 animate-blob animation-delay-2000"></div>
+         <div className="absolute -bottom-32 left-1/3 w-96 h-96 bg-pink-400/20 dark:bg-pink-600/20 rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-3xl opacity-70 animate-blob animation-delay-4000"></div>
+      </div>
+
+      <div className="relative z-10 flex flex-col min-h-screen">
+        <Header theme={theme} toggleTheme={toggleTheme} onOpenHelp={() => setShowHelp(true)} />
         
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800/50 rounded-2xl flex items-start gap-3 animate-fade-in">
-            <AlertTriangle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
-            <div>
-              <h4 className="text-sm font-semibold text-red-800 dark:text-red-300">Connection Issue</h4>
-              <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
-              <button 
-                onClick={refetch}
-                className="mt-2 text-xs font-medium text-red-700 dark:text-red-300 hover:underline"
-              >
-                Retry Now
-              </button>
+        <main className="flex-grow max-w-md mx-auto w-full px-4 py-8 transition-all duration-500 flex flex-col justify-start md:justify-center min-h-[80vh]">
+          
+          {error && (
+            <div className="mb-6 p-4 bg-red-50/80 dark:bg-red-900/30 backdrop-blur-md border border-red-100 dark:border-red-800/50 rounded-2xl flex items-start gap-3 animate-fade-in shadow-lg z-20">
+              <AlertTriangle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-semibold text-red-800 dark:text-red-300">Connection Issue</h4>
+                <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
+                <p className="text-[10px] text-red-500/80 mt-1">Displaying last known data.</p>
+                <button 
+                  onClick={refetch}
+                  className="mt-2 text-xs font-medium text-red-700 dark:text-red-300 hover:underline"
+                >
+                  Retry Now
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        <RateCard 
-          data={data}
-          status={status}
-          threshold={threshold}
-          onRefresh={refetch}
-          showDetails={showDetails}
-          onToggleDetails={() => setShowDetails(!showDetails)}
-          onManualInput={handleManualRate}
-        />
-
-        <div className={`transition-all duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] overflow-hidden ${showDetails ? 'max-h-[2000px] opacity-100 translate-y-0 scale-100' : 'max-h-0 opacity-0 -translate-y-4 scale-95 origin-top'}`}>
-          <div className="pt-2 pb-24 space-y-6">
-            <TrendChart history={history} />
-
-            <ThresholdSettings 
-              threshold={threshold} 
-              setThreshold={setThreshold}
-              history={history}
-              onExport={exportCSV}
+          <div className="relative">
+            <RateCard 
+              data={data}
+              status={status}
+              threshold={threshold}
+              previousRate={previousRate}
+              onRefresh={refetch}
+              showDetails={showDetails}
+              onToggleDetails={() => setShowDetails(!showDetails)}
+              onManualInput={handleManualRate}
             />
 
-            <AlertLogs alerts={alerts} />
-          </div>
-        </div>
-        
-      </main>
-      
-      {/* Sticky Bottom Status for Mobile */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/90 dark:bg-ios-darkCard/90 backdrop-blur-lg border-t border-slate-200/50 dark:border-white/10 md:hidden z-40 transition-colors">
-         <div className="flex justify-between items-center max-w-md mx-auto">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                {status === 'LOADING' ? 'Syncing...' : status === 'SUCCESS' ? 'Live Data' : 'Offline'}
-            </span>
-            <div className={`flex items-center gap-2`}>
-                <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">
-                  {status === 'LOADING' ? 'Updating' : 'Active'}
-                </span>
-                <div className={`w-2 h-2 rounded-full ${status === 'SUCCESS' ? 'bg-green-500' : status === 'ERROR' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+            {/* Contextual Bubble Panel - Floating Bottom Sheet effect */}
+            <div className={`transform transition-all duration-700 cubic-bezier(0.32, 0.72, 0, 1) origin-top ${showDetails ? 'opacity-100 translate-y-4 scale-100' : 'opacity-0 -translate-y-12 scale-90 pointer-events-none absolute inset-x-0 top-full'}`}>
+              <div className="space-y-4">
+                <TrendChart history={history} />
+
+                <ThresholdSettings 
+                  threshold={threshold} 
+                  setThreshold={setThreshold}
+                  history={history}
+                  onExport={exportCSV}
+                />
+
+                <AlertLogs alerts={alerts} />
+              </div>
             </div>
-         </div>
+          </div>
+          
+        </main>
+        
+        {/* Sticky Bottom Status for Mobile (Glass) */}
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-full bg-white/60 dark:bg-black/60 backdrop-blur-xl border border-white/20 dark:border-white/10 shadow-lg md:hidden z-40 transition-all duration-300 flex items-center gap-3">
+              <div className={`w-2 h-2 rounded-full ${status === 'SUCCESS' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : status === 'ERROR' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  {status === 'LOADING' ? 'Syncing CIMB...' : status === 'SUCCESS' ? 'Live' : 'Offline'}
+              </span>
+        </div>
       </div>
 
       <HelpModal isOpen={showHelp} onClose={() => setShowHelp(false)} />

@@ -16,17 +16,21 @@ export const fetchCimbRate = async (): Promise<RateData> => {
   try {
     const model = 'gemini-2.5-flash';
     const prompt = `
-      Find the current "SGD to MYR" exchange rate for CIMB Clicks Singapore (Business or Consumer).
-      I need the specific numeric rate that represents 1 SGD = X MYR.
+      Perform a live search for the current "SGD to MYR" exchange rate on CIMB Clicks Singapore.
+      Target URL context: cimbclicks.com.sg/sgd-to-myr-business or similar official CIMB pages.
+
+      I need the exact "Selling" rate (Bank Sells MYR / Customer Buys MYR) for 1 SGD.
       
-      Look for the "Selling" rate (Bank Sells MYR) or the direct conversion rate displayed on their page.
+      Strictly follow these steps:
+      1. Find the numeric rate (e.g., 3.1950).
+      2. Identify the timestamp of the page or rate if available.
       
-      Return the response in this specific format:
+      Output Format:
       "Rate: [NUMBER]"
-      "Time: [CURRENT_TIME]"
+      "Time: [TIME string found or 'Now']"
+      "Source: [URL]"
       
-      If you find multiple rates, prefer the "Business" rate if available, otherwise the standard consumer rate.
-      Only provide the numeric value for the rate.
+      If the site is unreachable or data is missing, respond with "Error: Unable to fetch".
     `;
 
     const response = await ai.models.generateContent({
@@ -41,11 +45,15 @@ export const fetchCimbRate = async (): Promise<RateData> => {
     const text = response.text || "";
     const groundings = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
 
+    if (text.includes("Error: Unable to fetch")) {
+        throw new Error("CIMB site unreachable or rate not found.");
+    }
+
     // Extract Rate using Regex
-    // Matches: "Rate: 3.1234" or "1 SGD = 3.1234 MYR" variations
-    const rateMatch = text.match(/Rate:\s*(\d+(\.\d+)?)/i) || text.match(/(\d\.\d{2,5})/);
+    // Matches: "Rate: 3.1234"
+    const rateMatch = text.match(/Rate:\s*(\d+(\.\d+)?)/i) || text.match(/(\d\.\d{3,5})/);
     
-    // Extract Time or use current time
+    // Extract Time
     const timeMatch = text.match(/Time:\s*(.+)/i);
     
     if (!rateMatch) {
@@ -53,10 +61,11 @@ export const fetchCimbRate = async (): Promise<RateData> => {
     }
 
     const rate = parseFloat(rateMatch[1]);
-    const timestamp = timeMatch ? timeMatch[1].trim() : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Use current local time if AI doesn't find a specific page timestamp, to indicate "Check time"
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     
     // Find a relevant source URL if available
-    let sourceUrl = "https://www.cimbclicks.com.sg/sgd-to-myr-business"; // Default
+    let sourceUrl = "https://www.cimbclicks.com.sg/sgd-to-myr-business"; // Default fallback
     if (groundings.length > 0) {
         // Try to find a URL that looks like CIMB
         const cimbChunk = groundings.find((chunk: any) => chunk.web?.uri?.includes('cimb'));
