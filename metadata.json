@@ -1,0 +1,5 @@
+{
+  "name": "CIMB Rate Watch",
+  "description": "Real-time SGD to MYR exchange rate monitor designed with an iOS-inspired aesthetic, powered by Gemini.",
+  "requestFramePermissions": []
+}
